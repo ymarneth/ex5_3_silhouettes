@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# but
+!/pyproject.toml
+!/poetry.lock
+!/ex_5_3_silhouettes/**/*.py
+
+# but but
+# Ignore the unignored
+# /ex_5_3_silhouettes/super/specific.py
