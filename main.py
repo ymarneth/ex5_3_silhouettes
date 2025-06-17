@@ -3,9 +3,86 @@ import cv2
 from skimage.measure import marching_cubes
 import vedo
 import trimesh
+import os
+
+DATA_PATH = "/workspace/data/slicesHuman"
+IMAGE_TEMPLATE = "out{n:03d}.png"
+OUTPUT_PATH = "/workspace/output/human_mesh.obj"
+
+VOXEL_GRID_SIZE = 256   # Size of the voxel grid
+STEP_SIZE = 2           # Step size for angles in degrees (assuming images are taken every 1 degrees)
+THRESHOLD = 0.95        # Percentage of views a voxel must appear in to be included
 
 
-def project_voxels(voxels_coords, angle_deg, image_size):
+def load_images(image_path: str, angles: np.ndarray) -> list:
+    images = []
+    for angle in angles:
+        img = cv2.imread(image_path.format(n=angle), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise FileNotFoundError(f"Image not found: {image_path.format(n=angle)}")
+        images.append({'angle': angle, 'img': img})
+    return images
+
+
+# Generate a 3D grid of normalized voxel coordinates in the range [-1, 1]
+def generate_voxel_coords(size: int) -> np.ndarray:
+    x = np.linspace(-1, 1, size)
+    y = np.linspace(-1, 1, size)
+    z = np.linspace(-1, 1, size)
+    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+    
+    return np.vstack([X.ravel(), Y.ravel(), Z.ravel()])
+
+
+def carve_voxels(
+    images: list, 
+    voxel_coords: np.ndarray,
+    grid_size: int,
+    threshhold: float = 0.95
+) -> np.ndarray:
+    votes = np.zeros((grid_size, grid_size, grid_size), dtype=np.uint16)
+    
+    # Loop through silhouette images and accumulate voxel votes
+    # Voxel votes are accumulated based on whether the voxel is inside the silhouette in each view
+    for image in images:
+        angle = image['angle']
+        img = image['img']
+        print(f'Processing angle: {angle}°')
+        mask = (img > 127).astype(np.uint8) # binarize
+        votes = accumulate_votes(votes, angle, mask, voxel_coords)
+
+    # Threshold to keep voxels that appear in x% of views
+    threshold = int(len(images) * threshhold)
+    voxels = votes >= threshold
+
+    if np.sum(voxels) == 0:
+        raise ValueError("No voxels remain after thresholding. Try reducing the threshold.")
+    
+    return voxels
+
+
+def accumulate_votes(
+    votes: np.ndarray,
+    angle_deg: float,
+    silhouette_mask: np.ndarray,
+    voxel_coords: np.ndarray
+) -> np.ndarray:
+    # project voxel coordinates to image coordinates
+    px, py = project_voxels(voxel_coords, angle_deg, silhouette_mask.shape)
+    isInside = silhouette_mask[py, px] > 0
+    
+    # Accumulate votes for voxels inside the silhouette
+    votes_flat = votes.ravel()
+    votes_flat += isInside.astype(np.uint8)
+    
+    return votes_flat.reshape(votes.shape)
+
+
+def project_voxels(
+    voxels_coords: np.ndarray, 
+    angle_deg: float, 
+    image_size: tuple[int, int]
+) -> tuple[np.ndarray, np.ndarray]:
     theta = np.radians(angle_deg)
     # Camera on circle around Y axis, rotation about Y axis by angle
     R = np.array([
@@ -20,8 +97,8 @@ def project_voxels(voxels_coords, angle_deg, image_size):
     proj_y = rotated[1, :]
 
     # Convert normalized coords [-1,1] to image pixels
-    px = ((proj_x + 1) / 2 * (image_size[1] - 1)).astype(int)
-    py = ((1 - (proj_y + 1) / 2) * (image_size[0] - 1)).astype(int)  # y inverted for image coords
+    px = ((proj_x + 1) / 2 * (image_size[1] - 1)).astype(np.int32)
+    py = ((1 - (proj_y + 1) / 2) * (image_size[0] - 1)).astype(np.int32)  # y inverted for image coords
 
     # Clip to valid range
     px = np.clip(px, 0, image_size[1] - 1)
@@ -30,57 +107,32 @@ def project_voxels(voxels_coords, angle_deg, image_size):
     return px, py
 
 
-def accumulate_votes(votes, angle_deg, silhouette_mask, voxel_coords):
-    px, py = project_voxels(voxel_coords, angle_deg, silhouette_mask.shape)
-    inside = silhouette_mask[py, px] > 0
-    votes_flat = votes.ravel()
-    votes_flat += inside.astype(np.uint8)
-    return votes_flat.reshape(votes.shape)
+def create_mesh(voxels: np.ndarray) -> trimesh.Trimesh:
+    verts, faces, _, _ = marching_cubes(voxels.astype(float), level=0.5)
+    return trimesh.Trimesh(vertices=verts, faces=faces)
+
+
+def save_mesh(mesh: trimesh.Trimesh, output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    mesh.export(output_path, file_type='obj')
+    print(f"Mesh saved to {output_path}")
 
 
 def main():
-    voxel_grid_size = 256
-    image_path_template = '/workspace/data/slicesHuman/out{n:03d}.png'
-    output_path = '/workspace/human_mesh.obj'
-
-    step_size = 2
-    angles = np.arange(0, 360, step_size)
-
-    # Initialize voxel grid
-    votes = np.zeros((voxel_grid_size, voxel_grid_size, voxel_grid_size), dtype=np.uint8)
-
-    # Define normalized voxel coordinates [-1, 1]
-    x = np.linspace(-1, 1, voxel_grid_size)
-    y = np.linspace(-1, 1, voxel_grid_size)
-    z = np.linspace(-1, 1, voxel_grid_size)
-    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-    voxel_coords = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]) 
-
-    # Load one image to get size
-    sample_img = cv2.imread(image_path_template.format(n=0), cv2.IMREAD_GRAYSCALE)
-    if sample_img is None:
-        raise FileNotFoundError("Could not read sample image at angle 0")
-
-    # Voting pass
-    for angle in angles:
-        print(f'Processing angle: {angle}°')
-        mask = cv2.imread(image_path_template.format(n=angle), cv2.IMREAD_GRAYSCALE)
-        mask = (mask > 127).astype(np.uint8)
-        votes = accumulate_votes(votes, angle, mask, voxel_coords)
-
-    # Threshold to keep voxels that appear in x% of views
-    threshold = int(len(angles) * 0.95)
-    voxels = votes >= threshold
-
-    if np.sum(voxels) == 0:
-        raise ValueError("No voxels remain after thresholding. Try reducing the threshold.")
-
-    verts, faces, normals, values = marching_cubes(voxels.astype(float), level=0.5)
-
-    mesh = trimesh.Trimesh(vertices=verts, faces=faces)
+    angles = np.arange(0, 360, STEP_SIZE)
+    image_path = f'{DATA_PATH}/{IMAGE_TEMPLATE}'
+    
+    # preload images to make the algorithm faster
+    images = load_images(image_path, angles)
+    
+    voxel_coords = generate_voxel_coords(VOXEL_GRID_SIZE)
+    voxels = carve_voxels(images, voxel_coords, VOXEL_GRID_SIZE, THRESHOLD)
+    mesh = create_mesh(voxels)
 
     vedo.Mesh([mesh.vertices, mesh.faces]).show(title="Mesh from Silhouettes")
-    mesh.export(output_path, file_type='obj')
+    
+    save_mesh(mesh, OUTPUT_PATH)
 
 
 if __name__ == "__main__":
