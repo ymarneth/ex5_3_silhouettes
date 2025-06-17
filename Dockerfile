@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -yq \
     pipx \
     # cleanup
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-    
+
 # Install and configure the poetry
 ENV PATH="/root/.local/bin:${PATH}" \
     POETRY_VERSION=${POETRY_VERSION} \
@@ -61,6 +61,7 @@ RUN if [ "$INSTALL_DEV_TOOLS" ]; then \
     coreutils \
     neovim \
     curl \
+    libgl1 \
     iputils-ping \
     && apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi

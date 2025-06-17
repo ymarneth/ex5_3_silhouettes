@@ -29,6 +29,9 @@ priority = "explicit"
 python = "^3.11"
 numpy = "^2.3.0"
 opencv-python = "^4.11.0.86"
+trimesh = "^4.6.12"
+scikit-image = "^0.25.2"
+vedo = "^2025.5.4"
 
 [tool.poetry.group.dev.dependencies]
 # https://python-poetry.org/docs/master/managing-dependencies/
