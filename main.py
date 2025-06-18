@@ -4,14 +4,18 @@ from skimage.measure import marching_cubes
 import vedo
 import trimesh
 import os
+import imageio
+
 
 DATA_PATH = "/workspace/data/slicesHuman"
 IMAGE_TEMPLATE = "out{n:03d}.png"
-OUTPUT_PATH = "/workspace/output/human_mesh.obj"
+OUTPUT_PATH = "/workspace/output"
+OBJ_OUTPUT_FILENAME = "human_mesh.obj"
+GIF_OUTPUT_FILENAME = "human.gif"
 
 VOXEL_GRID_SIZE = 256   # Size of the voxel grid
-STEP_SIZE = 2           # Step size for angles in degrees (assuming images are taken every 1 degrees)
-THRESHOLD = 0.95        # Percentage of views a voxel must appear in to be included
+STEP_SIZE = 1           # Step size for angles in degrees (assuming images are taken every 1 degrees), can be used to make rougher estimations for debugging
+THRESHOLD = 0.99        # Percentage of views a voxel must appear in to be included
 
 
 def load_images(image_path: str, angles: np.ndarray) -> list:
@@ -119,6 +123,18 @@ def save_mesh(mesh: trimesh.Trimesh, output_path: str):
     print(f"Mesh saved to {output_path}")
 
 
+def generate_gif(images: list, output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    frames = []
+    for image in images:
+        img = image['img']
+        frames.append(cv2.cvtColor(img, cv2.COLOR_GRAY2RGB))  # convert to rgb for gif
+
+    imageio.mimsave(output_path, frames, duration=0.1)
+    print(f"GIF saved to {output_path}")
+
+
 def main():
     angles = np.arange(0, 360, STEP_SIZE)
     image_path = f'{DATA_PATH}/{IMAGE_TEMPLATE}'
@@ -126,13 +142,16 @@ def main():
     # preload images to make the algorithm faster
     images = load_images(image_path, angles)
     
+    # generate for debugging
+    generate_gif(images, os.path.join(OUTPUT_PATH, GIF_OUTPUT_FILENAME))
+    
     voxel_coords = generate_voxel_coords(VOXEL_GRID_SIZE)
     voxels = carve_voxels(images, voxel_coords, VOXEL_GRID_SIZE, THRESHOLD)
     mesh = create_mesh(voxels)
 
     vedo.Mesh([mesh.vertices, mesh.faces]).show(title="Mesh from Silhouettes")
     
-    save_mesh(mesh, OUTPUT_PATH)
+    save_mesh(mesh, os.path.join(OUTPUT_PATH, OBJ_OUTPUT_FILENAME))
 
 
 if __name__ == "__main__":
