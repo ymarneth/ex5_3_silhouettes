@@ -14,7 +14,6 @@ reports/
 *.pickle*
 *.xls*
 *.zip*
-output/
 
 # direnv
 .envrc
